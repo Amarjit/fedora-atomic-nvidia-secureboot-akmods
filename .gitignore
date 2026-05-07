@@ -1,0 +1,20 @@
+# Generated RPMs and local build output
+*.rpm
+rpmbuild/
+akmods-keys-local/
+
+# Local signing material
+*.priv
+*.der
+*.key
+*.pem
+
+# Logs and transient state
+*.log
+setup.log
+*.tmp
+*.swp
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
