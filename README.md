@@ -1,4 +1,4 @@
-# atomic-nvidia-secureboot-akmods
+# fedora-atomic-nvidia-secureboot-akmods
 
 Resumable Fedora Atomic / rpm-ostree helper for NVIDIA proprietary drivers with Secure Boot enabled.
 
