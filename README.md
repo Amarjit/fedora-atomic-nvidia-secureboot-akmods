@@ -51,7 +51,9 @@ It handles:
 - local `akmods-keys` RPM creation
 - key consistency checks across original, packaged, and active key files
 - signed NVIDIA kmod RPM creation using akmods
-- extraction and signature verification before layering the generated `kmod-nvidia` RPM
+- extraction and signature verification for generated `kmod-nvidia` RPMs
+- default akmods path for providing signed NVIDIA modules automatically
+- optional `--layer-kmod-rpm` recovery mode for manually layering generated `kmod-nvidia` RPMs
 - active module signer, package integrity, and `nvidia-smi` checks
 - stale or unsigned cached kmod RPM detection
 - overwritten-module detection and repair path
@@ -202,6 +204,15 @@ sudo ./fedora_atomic_nvidia_secureboot_setup.sh
 
 Repeat until the script reports that NVIDIA works.
 
+Default path:
+
+- install/check `akmod-nvidia`
+- create/package `akmods-keys`
+- enroll MOK
+- run akmods
+- verify signed generated kmod RPM
+- verify active module after reboot if needed
+
 ## Diagnostic mode
 
 To print current state without staging rpm-ostree changes:
@@ -263,6 +274,30 @@ A blank `modinfo -F signer nvidia` is bad when Secure Boot is enabled.
 
 ## Recovery notes
 
+### Manually layer a generated kmod RPM
+
+The default path does not manually layer generated `kmod-nvidia-$kernel` RPMs. When `akmod-nvidia`, `akmods-keys`, MOK enrollment, and `/etc/rpm/macros.kmodtool` are working, akmods should provide signed NVIDIA modules automatically.
+
+Recovery path:
+
+- `--layer-kmod-rpm` manually layers the generated `kmod-nvidia-$kernel` RPM
+- this is not normally needed
+- because it is tied to one exact kernel, it can block future rpm-ostree upgrades
+
+If that happens, remove the old exact package with:
+
+```bash
+sudo rpm-ostree upgrade --uninstall kmod-nvidia-<old-kernel-version>
+```
+
+or:
+
+```bash
+sudo rpm-ostree uninstall kmod-nvidia-<old-kernel-version>
+```
+
+Then reboot and rerun the script.
+
 ### NVIDIA worked, then broke after removing `akmods-keys`
 
 Do not remove `akmods-keys` while keeping `akmod-nvidia` installed.
@@ -283,7 +318,7 @@ rpm -V kmod-nvidia-$(uname -r)
 
 If the signer is blank or `rpm -V` shows changed NVIDIA module files, akmods likely rebuilt or overwrote the signed modules without the signing key being available.
 
-The script attempts to detect this and repair by removing the broken layered kmod from the next deployment, then relayering a verified signed kmod RPM after reboot.
+The script attempts to detect this and repair by removing the broken layered kmod from the next deployment. If automatic akmods recovery is not enough, rerun with `--layer-kmod-rpm` to manually layer a verified signed kmod RPM as a recovery path.
 
 ### Multiple cached kmod RPMs
 
@@ -343,6 +378,24 @@ sudo rm -rf /var/lib/atomic-nvidia-secureboot-setup/akmods-keys-local
 ```
 
 Do not delete `/etc/pki/akmods/private/private_key.priv` unless you understand that future signed rebuilds will require generating and enrolling a new key.
+
+## References
+
+- RPM Fusion Secure Boot guide
+  https://rpmfusion.org/Howto/Secure%20Boot
+  Documents akmods Secure Boot signing support and MOK enrollment for locally built kmods.
+
+- RPM Fusion NVIDIA guide
+  https://rpmfusion.org/Howto/NVIDIA
+  Documents the RPM Fusion NVIDIA driver path and points Secure Boot users to the Secure Boot signing guidance.
+
+- Fedora Silverblue issue: akmods does not sign compiled module when using rpm-ostree
+  https://github.com/fedora-silverblue/issue-tracker/issues/499
+  Tracks the Fedora Atomic/Silverblue rpm-ostree issue where akmods signing keys under `/etc/pki/akmods` are not visible in the expected signing context.
+
+- silverblue-akmods-keys
+  https://github.com/CheariX/silverblue-akmods-keys
+  Prior art for packaging akmods signing keys on Silverblue/Kinoite-style systems so akmods can sign modules under Secure Boot.
 
 ## Disclaimer
 
