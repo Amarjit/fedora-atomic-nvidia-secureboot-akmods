@@ -78,10 +78,11 @@
 #   - adds nouveau blacklist and nvidia-drm.modeset=1 kernel args
 #   - creates or reuses a local akmods signing key
 #   - checks/enrolls the public MOK key
-#   - builds and layers a local akmods-keys RPM
+#   - builds and installs a local akmods-keys RPM
 #   - uses akmods to build a signed NVIDIA kmod RPM
-#   - inspects signatures inside generated RPMs before layering
-#   - layers the signed kmod RPM
+#   - inspects signatures inside generated kmod RPMs
+#   - normally lets akmods provide the signed NVIDIA module automatically
+#   - optionally layers the signed kmod RPM only with --layer-kmod-rpm recovery mode
 #   - verifies module signer, Secure Boot state, and nvidia-smi
 
 set -Eeuo pipefail
@@ -97,6 +98,7 @@ PACKAGED_CERT="/etc/pki/akmods-keys/certs/public_key.der"
 PACKAGED_PRIV="/etc/pki/akmods-keys/private/private_key.priv"
 MACRO_FILE="/etc/rpm/macros.kmodtool"
 MODE="run"
+LAYER_KMOD_RPM="no"
 
 KARGS=(
   "rd.driver.blacklist=nouveau"
@@ -110,6 +112,9 @@ REQUIRED_PACKAGES=(
 )
 
 case "${1:-}" in
+  --layer-kmod-rpm)
+    LAYER_KMOD_RPM="yes"
+    ;;
   --status|-s)
     MODE="status"
     ;;
@@ -119,11 +124,17 @@ Fedora Atomic NVIDIA + Secure Boot setup helper
 
 Usage:
   sudo ./fedora_atomic_nvidia_secureboot_setup.sh
+  sudo ./fedora_atomic_nvidia_secureboot_setup.sh --layer-kmod-rpm
   sudo ./fedora_atomic_nvidia_secureboot_setup.sh --status
 
 Modes:
   default     Run/resume setup. May stage rpm-ostree changes and ask for reboots.
   --status   Diagnostic-only. Shows current state and does not stage rpm-ostree changes.
+
+Options:
+  --layer-kmod-rpm
+      Recovery mode. Manually layer the generated kmod-nvidia RPM into rpm-ostree.
+      Not normally needed. Kernel-specific kmod RPMs may block future upgrades.
 EOF
     exit 0
     ;;
@@ -136,6 +147,13 @@ Use --help for usage.
     exit 2
     ;;
 esac
+
+if [[ "$#" -gt 1 ]]; then
+  printf 'Too many arguments.
+Use --help for usage.
+' >&2
+  exit 2
+fi
 
 log() {
   printf '
@@ -330,6 +348,17 @@ reboot_notice_and_exit() {
   log "A reboot is required before continuing."
   log "Reboot now, then run: sudo $SCRIPT_NAME"
   log "The script is resumable; it will continue from the next unfinished check."
+  exit 0
+}
+
+module_reboot_notice_and_exit() {
+  log "A reboot is required so the signed NVIDIA module can become active."
+  if [[ "$LAYER_KMOD_RPM" == "yes" ]]; then
+    log "Reboot now, then run: sudo $SCRIPT_NAME --layer-kmod-rpm"
+  else
+    log "Reboot now, then run: sudo $SCRIPT_NAME"
+  fi
+  log "The script is resumable; it will verify the active NVIDIA module after reboot."
   exit 0
 }
 
@@ -753,7 +782,7 @@ Local akmods signing key material and kmodtool macros for rpm-ostree based syste
 %build
 %install
 install -D -m 0644 %{SOURCE0} %{buildroot}/etc/pki/akmods-keys/certs/public_key.der
-install -D -m 0644 %{SOURCE1} %{buildroot}/etc/pki/akmods-keys/private/private_key.priv
+install -D -m 0600 %{SOURCE1} %{buildroot}/etc/pki/akmods-keys/private/private_key.priv
 install -D -m 0644 %{SOURCE2} %{buildroot}/etc/rpm/macros.kmodtool
 
 %files
@@ -761,7 +790,7 @@ install -D -m 0644 %{SOURCE2} %{buildroot}/etc/rpm/macros.kmodtool
 %dir /etc/pki/akmods-keys/certs
 %attr(0700,root,root) %dir /etc/pki/akmods-keys/private
 /etc/pki/akmods-keys/certs/public_key.der
-%attr(0644,root,root) /etc/pki/akmods-keys/private/private_key.priv
+%attr(0600,root,root) /etc/pki/akmods-keys/private/private_key.priv
 /etc/rpm/macros.kmodtool
 EOF
 
@@ -788,7 +817,7 @@ Fedora Atomic/rpm-ostree needs a local akmods-keys RPM so the signing key is vis
     if grep -qxF "%_kmodtool_signmodules_pubkey $PACKAGED_CERT" "$MACRO_FILE" \
       && grep -qxF "%_kmodtool_signmodules_privkey $PACKAGED_PRIV" "$MACRO_FILE"; then
       chmod 0644 "$PACKAGED_CERT" || true
-      chmod 0644 "$PACKAGED_PRIV" || true
+      chmod 0600 "$PACKAGED_PRIV" || true
 
       local pair cert priv
       pair="$(find_akmods_keypair)" || fail "No akmods keypair found."
@@ -837,14 +866,14 @@ Fedora Atomic/rpm-ostree needs a local akmods-keys RPM so the signing key is vis
 ensure_packaged_key_permissions() {
   explain "Check: packaged key permissions
 
-The kmod signing helper must be able to read both the public certificate and private key during the akmods build. The packaged private key is made readable to the local build/signing process."
+The kmod signing helper must be able to read both the public certificate and private key during the akmods build. The packaged private key is kept root-readable for the local build/signing process."
 
   [[ -e "$PACKAGED_CERT" ]] || fail "Missing $PACKAGED_CERT"
   [[ -e "$PACKAGED_PRIV" ]] || fail "Missing $PACKAGED_PRIV"
   [[ -e "$MACRO_FILE" ]] || fail "Missing $MACRO_FILE"
 
   chmod 0644 "$PACKAGED_CERT"
-  chmod 0644 "$PACKAGED_PRIV"
+  chmod 0600 "$PACKAGED_PRIV"
   ls -la "$PACKAGED_CERT" "$PACKAGED_PRIV" "$MACRO_FILE" | tee -a "$LOG_FILE"
 
   local pair cert priv
@@ -999,9 +1028,9 @@ Cached kmod RPMs are verified before use. Unsigned or broken cached RPMs are mov
 }
 
 layer_signed_kmod_rpm_if_needed() {
-  explain "Install: layer signed kmod RPM
+  explain "Recovery install: layer signed kmod RPM
 
-The signed NVIDIA modules must be layered into the rpm-ostree deployment."
+This is a recovery path. It manually layers the generated kmod-nvidia RPM into rpm-ostree. It is not normally needed when akmod-nvidia, akmods-keys, and MOK enrollment are working. Manually layered kmod-nvidia-\$kernel RPMs are tied to one exact kernel and may block future rpm-ostree upgrades."
 
   local kernel rpm_path kmod_pkg rpm_count verify_output active_signer active_sig_key normalized_active_sig_key expected_signer expected_sig_key
   kernel="$(current_kernel)"
@@ -1076,6 +1105,15 @@ This checks the exact NVIDIA module that modprobe will use, confirms it has a si
   log "NVIDIA module sig_key from modinfo: ${sig_key:-blank}"
   log "Expected NVIDIA module signer from local MOK certificate: $expected_signer"
   [[ -n "$expected_sig_key" ]] && log "Expected NVIDIA module sig_key from local MOK certificate: $expected_sig_key"
+
+  if [[ -z "$module_path" ]]; then
+    warn "A signed NVIDIA module RPM is available, but the NVIDIA module is not active in the running deployment yet."
+    warn "This can be normal immediately after a successful akmods build."
+    warn "If you have already rebooted once after seeing this message and it still appears, inspect the akmods log output or retry with:"
+    warn "  sudo $SCRIPT_NAME --layer-kmod-rpm"
+    journalctl -u akmods --no-pager -n 120 2>/dev/null | tee -a "$LOG_FILE" || true
+    module_reboot_notice_and_exit
+  fi
 
   if [[ -n "$module_path" && -e "$module_path" ]]; then
     show_file_identity "Active NVIDIA module file" "$module_path"
@@ -1231,7 +1269,13 @@ main() {
   ensure_akmods_keys_package_installed
   ensure_packaged_key_permissions
   build_signed_kmod_rpm
-  layer_signed_kmod_rpm_if_needed
+
+  if [[ "$LAYER_KMOD_RPM" == "yes" ]]; then
+    layer_signed_kmod_rpm_if_needed
+  else
+    log "Skipping manual kmod RPM layering. akmod-nvidia plus akmods-keys should allow akmods to provide signed NVIDIA modules automatically."
+  fi
+
   verify_module_signature_and_driver
   print_status
 
@@ -1246,6 +1290,8 @@ main() {
 Keep akmods-keys installed while akmod-nvidia is installed.
 
 Reason: akmods can automatically rebuild NVIDIA modules after a kernel or driver change. If akmods-keys is missing at that moment, it may rebuild unsigned modules. Secure Boot will then reject them and nvidia-smi will fail.
+
+Do not manually layer kmod-nvidia-\$kernel RPMs unless using --layer-kmod-rpm as a recovery path. Manually layered kmod RPMs are tied to one exact kernel and may block future rpm-ostree upgrades.
 
 Keep the original keypair under /etc/pki/akmods as well. If you lose the private key, future signed rebuilds require generating and enrolling a new key."
 }
