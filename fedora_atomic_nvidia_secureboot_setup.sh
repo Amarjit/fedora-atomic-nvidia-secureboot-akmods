@@ -746,10 +746,15 @@ The public half of the akmods signing key must be enrolled. Without this, Secure
   warn "MOK public key is not enrolled yet."
   explain "About to queue MOK enrollment
 
-mokutil --import will ask you to create a temporary password. On next reboot, use:
+mokutil --import will ask you to create a temporary password. Enter it, then enter it again to confirm. On next reboot, use:
   Enroll MOK -> Continue -> Yes -> enter temporary password -> Reboot"
 
-  run mokutil --import "$cert"
+  log "+ mokutil --import $cert"
+  # Run directly rather than through run()/tee: mokutil --import prompts
+  # interactively for a password, and piping its stdout through tee makes
+  # glibc fully-buffer it instead of line-buffering, so the prompts don't
+  # show up before it blocks waiting on input.
+  mokutil --import "$cert" || fail "mokutil --import failed or was cancelled. Rerun the script to try again."
   mok_reboot_notice_and_exit
 }
 
