@@ -524,7 +524,9 @@ The open-source nouveau driver must stay out of the way, and NVIDIA DRM modesett
     fi
   done
 
-  [[ "$changed" -eq 1 ]] && reboot_notice_and_exit
+  if [[ "$changed" -eq 1 ]]; then
+    reboot_notice_and_exit
+  fi
 }
 
 ensure_nvidia_packages() {
