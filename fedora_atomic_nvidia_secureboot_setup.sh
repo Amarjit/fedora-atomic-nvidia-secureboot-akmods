@@ -1087,6 +1087,20 @@ This is a recovery path. It manually layers the generated kmod-nvidia RPM into r
   fi
 }
 
+active_module_is_trusted() {
+  local module_path signer sig_key normalized_sig_key expected_sig_key
+  module_path="$(modinfo -n nvidia 2>/dev/null || true)"
+  [[ -n "$module_path" ]] || return 1
+
+  signer="$(modinfo -F signer nvidia 2>/dev/null || true)"
+  [[ -n "$signer" ]] || return 1
+
+  sig_key="$(modinfo -F sig_key nvidia 2>/dev/null || true)"
+  normalized_sig_key="$(tr -d ':[:space:]' <<<"$sig_key" | tr '[:lower:]' '[:upper:]')"
+  expected_sig_key="$(expected_key_id)"
+  [[ -z "$expected_sig_key" || "$normalized_sig_key" == "$expected_sig_key" ]]
+}
+
 verify_module_signature_and_driver() {
   explain "Verify: module signature and driver load
 
@@ -1273,7 +1287,7 @@ main() {
   ensure_packaged_key_permissions
   build_signed_kmod_rpm
 
-  if [[ "$LAYER_KMOD_RPM" == "yes" ]] || [[ -z "$(modinfo -n nvidia 2>/dev/null || true)" ]]; then
+  if [[ "$LAYER_KMOD_RPM" == "yes" ]] || ! active_module_is_trusted; then
     layer_signed_kmod_rpm_if_needed
   else
     log "Skipping kmod RPM layering. A correctly signed NVIDIA module is already active for this kernel."
