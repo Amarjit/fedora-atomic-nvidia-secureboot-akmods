@@ -190,6 +190,7 @@ run() {
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     exec sudo --preserve-env=PATH bash "$0" "$@"
+    fail "Failed to re-exec as root via sudo. Install/configure sudo, or rerun this script as root."
   fi
 }
 
