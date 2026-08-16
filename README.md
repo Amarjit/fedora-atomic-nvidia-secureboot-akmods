@@ -52,8 +52,8 @@ It handles:
 - key consistency checks across original, packaged, and active key files
 - signed NVIDIA kmod RPM creation using akmods
 - extraction and signature verification for generated `kmod-nvidia` RPMs
-- default akmods path for providing signed NVIDIA modules automatically
-- optional `--layer-kmod-rpm` recovery mode for manually layering generated `kmod-nvidia` RPMs
+- automatic layering of a generated `kmod-nvidia` RPM only when no active, correctly signed module is found
+- `--layer-kmod-rpm` to force a relayer for recovery even when a module already appears active
 - active module signer, package integrity, and `nvidia-smi` checks
 - stale or unsigned cached kmod RPM detection
 - overwritten-module detection and repair path
@@ -211,6 +211,7 @@ Default path:
 - enroll MOK
 - run akmods
 - verify signed generated kmod RPM
+- layer the kmod RPM only if no active, correctly signed module is found yet
 - verify active module after reboot if needed
 
 ## Diagnostic mode
@@ -276,13 +277,12 @@ A blank `modinfo -F signer nvidia` is bad when Secure Boot is enabled.
 
 ### Manually layer a generated kmod RPM
 
-The default path does not manually layer generated `kmod-nvidia-$kernel` RPMs. When `akmod-nvidia`, `akmods-keys`, MOK enrollment, and `/etc/rpm/macros.kmodtool` are working, akmods should provide signed NVIDIA modules automatically.
+The default path only layers a generated `kmod-nvidia-$kernel` RPM when no active, correctly signed NVIDIA module is found for the running kernel (first run, or after a kernel/driver change). Once a working module is active, further runs skip layering and rely on `akmod-nvidia`/`akmods-keys` to keep it current.
 
-Recovery path:
+`--layer-kmod-rpm` forces a relayer even when a module already appears active. Use it for recovery:
 
-- `--layer-kmod-rpm` manually layers the generated `kmod-nvidia-$kernel` RPM
-- this is not normally needed
-- because it is tied to one exact kernel, it can block future rpm-ostree upgrades
+- when the active module looks wrong (unsigned, mismatched signer) but the script isn't detecting it on its own
+- because layered `kmod-nvidia-$kernel` RPMs are tied to one exact kernel, forcing one can block future rpm-ostree upgrades
 
 If that happens, remove the old exact package with:
 

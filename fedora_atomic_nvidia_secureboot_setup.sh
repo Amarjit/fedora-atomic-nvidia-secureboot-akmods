@@ -1273,10 +1273,10 @@ main() {
   ensure_packaged_key_permissions
   build_signed_kmod_rpm
 
-  if [[ "$LAYER_KMOD_RPM" == "yes" ]]; then
+  if [[ "$LAYER_KMOD_RPM" == "yes" ]] || [[ -z "$(modinfo -n nvidia 2>/dev/null || true)" ]]; then
     layer_signed_kmod_rpm_if_needed
   else
-    log "Skipping manual kmod RPM layering. akmod-nvidia plus akmods-keys should allow akmods to provide signed NVIDIA modules automatically."
+    log "Skipping kmod RPM layering. A correctly signed NVIDIA module is already active for this kernel."
   fi
 
   verify_module_signature_and_driver
