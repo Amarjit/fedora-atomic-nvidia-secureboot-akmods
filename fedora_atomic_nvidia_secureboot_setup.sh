@@ -651,6 +651,13 @@ expected_key_id() {
   cert_subject_key_id "$cert"
 }
 
+files_same_hash() {
+  local left_hash right_hash
+  left_hash="$(sha256_file "$1")"
+  right_hash="$(sha256_file "$2")"
+  [[ "$left_hash" == "$right_hash" && "$left_hash" != "missing" ]]
+}
+
 require_files_same_hash() {
   local left_label="$1"
   local left_file="$2"
@@ -772,10 +779,12 @@ write_akmods_keys_sources() {
 %_kmodtool_signmodules_privkey /etc/pki/akmods-keys/private/private_key.priv
 EOF
 
-  cat > "$BUILD_DIR/akmods-keys.spec" <<'EOF'
+  local release
+  release="$(date +%Y%m%d%H%M%S)"
+  cat > "$BUILD_DIR/akmods-keys.spec" <<EOF
 Name:           akmods-keys
 Version:        0.0.2
-Release:        1%{?dist}
+Release:        ${release}%{?dist}
 Summary:        Local akmods signing keys for rpm-ostree kmod builds
 License:        MIT
 BuildArch:      noarch
@@ -819,27 +828,32 @@ ensure_akmods_keys_package_installed() {
 
 Fedora Atomic/rpm-ostree needs a local akmods-keys RPM so the signing key is visible to kmod signing. This RPM contains the private key; keep it local."
 
-  if is_rpm_installed akmods-keys && [[ -e "$PACKAGED_CERT" && -e "$PACKAGED_PRIV" && -e "$MACRO_FILE" ]]; then
-    log "akmods-keys is installed; validating installed key files and RPM macro content."
+  local replace_installed=0
+  if is_rpm_installed akmods-keys; then
+    replace_installed=1
+    log "akmods-keys is installed: $(rpm -q akmods-keys)"
+    log "Validating installed key files and RPM macro content."
 
-    if grep -qxF "%_kmodtool_signmodules_pubkey $PACKAGED_CERT" "$MACRO_FILE" \
-      && grep -qxF "%_kmodtool_signmodules_privkey $PACKAGED_PRIV" "$MACRO_FILE"; then
+    local pair cert priv
+    pair="$(find_akmods_keypair)" || fail "No akmods keypair found."
+    cert="${pair%%|*}"
+    priv="${pair##*|}"
+
+    if [[ ! -e "$PACKAGED_CERT" || ! -e "$PACKAGED_PRIV" || ! -e "$MACRO_FILE" ]]; then
+      warn "Installed akmods-keys package is missing one of its files. Rebuilding local akmods-keys RPM."
+    elif ! grep -qxF "%_kmodtool_signmodules_pubkey $PACKAGED_CERT" "$MACRO_FILE" \
+      || ! grep -qxF "%_kmodtool_signmodules_privkey $PACKAGED_PRIV" "$MACRO_FILE"; then
+      warn "Installed akmods-keys package exists, but its macro content does not match this script's expected signing paths. Rebuilding local akmods-keys RPM."
+    elif ! files_same_hash "$cert" "$PACKAGED_CERT" || ! files_same_hash "$priv" "$PACKAGED_PRIV"; then
+      warn "Installed akmods-keys package was built from a different keypair than the one under /etc/pki/akmods. Rebuilding local akmods-keys RPM with the current key."
+    else
       chmod 0644 "$PACKAGED_CERT" || true
       chmod 0600 "$PACKAGED_PRIV" || true
-
-      local pair cert priv
-      pair="$(find_akmods_keypair)" || fail "No akmods keypair found."
-      cert="${pair%%|*}"
-      priv="${pair##*|}"
-
       require_files_same_hash "original public key" "$cert" "active packaged public key" "$PACKAGED_CERT"
       require_files_same_hash "original private key" "$priv" "active packaged private key" "$PACKAGED_PRIV"
-
       log "Installed akmods-keys package is valid for the current local signing key."
       return
     fi
-
-    warn "Installed akmods-keys package exists, but its macro content does not match this script's expected signing paths. Rebuilding local akmods-keys RPM."
   fi
 
   log "Building local akmods-keys RPM."
@@ -867,6 +881,10 @@ Fedora Atomic/rpm-ostree needs a local akmods-keys RPM so the signing key is vis
   log "Packaged RPM macro content from RPM:"
   cat "$inspect_dir/$MACRO_FILE" | tee -a "$LOG_FILE"
 
+  if [[ "$replace_installed" -eq 1 ]]; then
+    log "Replacing the currently layered akmods-keys package with the rebuilt one."
+    run rpm-ostree uninstall akmods-keys
+  fi
   run rpm-ostree install "$rpm_path"
   reboot_notice_and_exit
 }
