@@ -192,11 +192,25 @@ explain() {
 
 run() {
   log "+ $*"
-  "$@" 2>&1 | tee -a "$LOG_FILE"
+  # Piping a command straight into tee turns its stdout into a pipe, so any
+  # password or confirmation prompt it prints gets stuck in a buffer and the
+  # user just sees the script hang. When script(1) is available, run the
+  # command on a pseudo terminal instead so prompts show up straight away
+  # and still get copied into the log.
+  if command -v script >/dev/null 2>&1; then
+    script -qefc "$(printf '%q ' "$@")" /dev/null 2>&1 | tee -a "$LOG_FILE"
+  else
+    "$@" 2>&1 | tee -a "$LOG_FILE"
+  fi
 }
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
+    printf '
+This script needs root. Re-running it with sudo.
+If you are asked for a password now, it is your normal Linux login password.
+
+'
     exec sudo --preserve-env=PATH bash "$0" "$@"
     fail "Failed to re-exec as root via sudo. Install/configure sudo, or rerun this script as root."
   fi
@@ -793,8 +807,10 @@ The public half of the akmods signing key must be enrolled. Without this, Secure
 
   explain "About to queue MOK enrollment
 
-mokutil --import will ask you to create a temporary password. Enter it, then enter it again to confirm. On next reboot, use:
-  Enroll MOK -> Continue -> Yes -> enter temporary password -> Reboot"
+The next prompt you see, 'input password:', comes from mokutil. It is asking you to CREATE a temporary password, not for your login password. Type anything you will remember for the next reboot, then type it again to confirm.
+
+On next reboot, use:
+  Enroll MOK -> Continue -> Yes -> enter that temporary password -> Reboot"
 
   log "+ mokutil --import $cert"
   # Run directly rather than through run()/tee: mokutil --import prompts
