@@ -530,7 +530,7 @@ ensure_kernel_args() {
 
 The open-source nouveau driver must stay out of the way, and NVIDIA DRM modesetting should be enabled for modern Wayland desktops."
 
-  local changed=0 existing
+  local existing missing=() append_args=()
   existing="$(rpm-ostree kargs 2>/dev/null || true)"
 
   log "Current kernel arguments:"
@@ -538,16 +538,18 @@ The open-source nouveau driver must stay out of the way, and NVIDIA DRM modesett
 ' "$existing" | tee -a "$LOG_FILE"
 
   for arg in "${KARGS[@]}"; do
-    if grep -qw -- "$arg" <<<"$existing"; then
+    if grep -qwF -- "$arg" <<<"$existing"; then
       log "Kernel arg already present: $arg"
     else
-      log "Adding kernel arg: $arg"
-      run rpm-ostree kargs --append-if-missing="$arg"
-      changed=1
+      log "Kernel arg missing: $arg"
+      missing+=("$arg")
+      append_args+=("--append-if-missing=$arg")
     fi
   done
 
-  if [[ "$changed" -eq 1 ]]; then
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    log "Adding kernel args in one rpm-ostree call: ${missing[*]}"
+    run rpm-ostree kargs "${append_args[@]}"
     reboot_notice_and_exit
   fi
 }
@@ -979,8 +981,8 @@ verify_kmod_rpm_signature() {
 
 This extracts the kmod-nvidia RPM and runs modinfo against each NVIDIA module inside before trusting it."
 
-  expected_signer="$(expected_key_common_name)"
-  expected_sig_key="$(expected_key_id)"
+  expected_signer="$(expected_key_common_name)" || { warn "Could not determine the expected signer from the local akmods keypair."; return 1; }
+  expected_sig_key="$(expected_key_id)" || { warn "Could not determine the expected key id from the local akmods keypair."; return 1; }
   log "Expected NVIDIA module signer from local MOK certificate: $expected_signer"
   if [[ -n "$expected_sig_key" ]]; then
     log "Expected NVIDIA module sig_key from local MOK certificate: $expected_sig_key"
@@ -1017,7 +1019,7 @@ This extracts the kmod-nvidia RPM and runs modinfo against each NVIDIA module in
     signer="$(modinfo -F signer "$module_file" 2>/dev/null || true)"
     sig_key="$(modinfo -F sig_key "$module_file" 2>/dev/null || true)"
     normalized_sig_key="$(tr -d ':[:space:]' <<<"$sig_key" | tr '[:lower:]' '[:upper:]')"
-    show_file_identity "Module inside kmod RPM: ${module_file#$inspect_dir/}" "$module_file"
+    show_file_identity "Module inside kmod RPM: ${module_file#"$inspect_dir"/}" "$module_file"
     printf 'signer: %s
 ' "${signer:-blank/unsigned}" | tee -a "$LOG_FILE"
     printf 'sig_key: %s
@@ -1177,7 +1179,7 @@ active_module_is_trusted() {
 
   sig_key="$(modinfo -F sig_key nvidia 2>/dev/null || true)"
   normalized_sig_key="$(tr -d ':[:space:]' <<<"$sig_key" | tr '[:lower:]' '[:upper:]')"
-  expected_sig_key="$(expected_key_id)"
+  expected_sig_key="$(expected_key_id)" || return 1
   [[ -z "$expected_sig_key" || "$normalized_sig_key" == "$expected_sig_key" ]]
 }
 
