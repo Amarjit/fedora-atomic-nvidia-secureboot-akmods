@@ -132,12 +132,17 @@ Usage:
 
 Modes:
   default     Run/resume setup. May stage rpm-ostree changes and ask for reboots.
-  --status   Diagnostic-only. Shows current state and does not stage rpm-ostree changes.
+              Builds and layers a kmod-nvidia RPM for this kernel only when no
+              correctly signed NVIDIA module is active yet.
+  --status    Diagnostic-only. Shows current state and does not stage rpm-ostree changes.
 
 Options:
   --layer-kmod-rpm
-      Recovery mode. Manually layer the generated kmod-nvidia RPM into rpm-ostree.
-      Not normally needed. Kernel-specific kmod RPMs may block future upgrades.
+      Recovery mode. Force a build and relayer of the generated kmod-nvidia RPM
+      even when a signed module already appears active. Kernel-specific kmod
+      RPMs are tied to one kernel and may block future upgrades, so remove
+      them with rpm-ostree uninstall once akmods keeps the module signed on
+      its own.
 EOF
     exit 0
     ;;
@@ -1062,9 +1067,9 @@ Cached kmod RPMs are verified before use. Unsigned or broken cached RPMs are mov
 }
 
 layer_signed_kmod_rpm_if_needed() {
-  explain "Recovery install: layer signed kmod RPM
+  explain "Layer signed kmod RPM
 
-This is a recovery path. It manually layers the generated kmod-nvidia RPM into rpm-ostree. It is not normally needed when akmod-nvidia, akmods-keys, and MOK enrollment are working. Manually layered kmod-nvidia-\$kernel RPMs are tied to one exact kernel and may block future rpm-ostree upgrades."
+No correctly signed NVIDIA module is active for this kernel, or --layer-kmod-rpm was given. This layers the generated kmod-nvidia RPM into rpm-ostree so a signed module is available after the next reboot. Layered kmod-nvidia-\$kernel RPMs are tied to one exact kernel and may block future rpm-ostree upgrades, so remove them once akmods keeps the module signed by itself."
 
   local kernel rpm_path kmod_pkg rpm_count verify_output active_signer active_sig_key normalized_active_sig_key expected_signer expected_sig_key
   kernel="$(current_kernel)"
@@ -1155,11 +1160,8 @@ This checks the exact NVIDIA module that modprobe will use, confirms it has a si
   [[ -n "$expected_sig_key" ]] && log "Expected NVIDIA module sig_key from local MOK certificate: $expected_sig_key"
 
   if [[ -z "$module_path" ]]; then
-    warn "A signed NVIDIA module RPM is available, but the NVIDIA module is not active in the running deployment yet."
-    warn "This can be normal immediately after a successful akmods build."
-    warn "If you have already rebooted once after seeing this message and it still appears, inspect the akmods log output or retry with:"
-    warn "  sudo $SCRIPT_NAME --layer-kmod-rpm"
-    journalctl -u akmods --no-pager -n 120 2>/dev/null | tee -a "$LOG_FILE" || true
+    warn "The NVIDIA module is not active in the running deployment yet."
+    warn "If this message keeps appearing after a reboot, check the log at $LOG_FILE for akmods build errors."
     module_reboot_notice_and_exit
   fi
 
@@ -1339,7 +1341,7 @@ Keep akmods-keys installed while akmod-nvidia is installed.
 
 Reason: akmods can automatically rebuild NVIDIA modules after a kernel or driver change. If akmods-keys is missing at that moment, it may rebuild unsigned modules. Secure Boot will then reject them and nvidia-smi will fail.
 
-Do not manually layer kmod-nvidia-\$kernel RPMs unless using --layer-kmod-rpm as a recovery path. Manually layered kmod RPMs are tied to one exact kernel and may block future rpm-ostree upgrades.
+If this script layered a kmod-nvidia-\$kernel RPM, remember it is tied to one exact kernel and may block future rpm-ostree upgrades. Remove it with rpm-ostree uninstall once akmods keeps the module signed by itself.
 
 Keep the original keypair under /etc/pki/akmods as well. If you lose the private key, future signed rebuilds require generating and enrolling a new key."
 }
