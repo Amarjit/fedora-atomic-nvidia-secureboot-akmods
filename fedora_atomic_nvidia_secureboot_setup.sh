@@ -385,6 +385,7 @@ Use this menu path:
 
 Notes:
   - The temporary MOK password is not your Linux login password.
+  - It is the password you typed at the mokutil prompt when the key was queued.
   - It is only used once to approve this key.
   - If you miss the screen or choose Continue Boot, boot Fedora and rerun this script."
 
@@ -650,6 +651,25 @@ cert_subject_key_id() {
   printf '%s' "$key_id"
 }
 
+cert_sha1_fingerprint() {
+  local cert="$1"
+  openssl x509 -inform DER -in "$cert" -noout -fingerprint -sha1 2>/dev/null \
+    | sed -n 's/^.*[Ff]ingerprint=//p' \
+    | tr -d ':[:space:]' \
+    | tr '[:lower:]' '[:upper:]'
+}
+
+mok_key_is_queued() {
+  local cert="$1" fingerprint
+  fingerprint="$(cert_sha1_fingerprint "$cert")"
+  [[ -n "$fingerprint" ]] || return 1
+  mokutil --list-new 2>/dev/null \
+    | sed -n 's/^.*SHA1 Fingerprint: *//p' \
+    | tr -d ':[:space:]' \
+    | tr '[:lower:]' '[:upper:]' \
+    | grep -qxF "$fingerprint"
+}
+
 expected_key_common_name() {
   local pair cert
   pair="$(find_akmods_keypair)" || fail "No akmods keypair found."
@@ -764,6 +784,13 @@ The public half of the akmods signing key must be enrolled. Without this, Secure
   fi
 
   warn "MOK public key is not enrolled yet."
+
+  if mok_key_is_queued "$cert"; then
+    log "This key is already queued with mokutil and is waiting for you to approve it in the MOK Manager screen."
+    log "You probably missed the blue MOK Manager screen on the last reboot, or chose Continue Boot."
+    mok_reboot_notice_and_exit
+  fi
+
   explain "About to queue MOK enrollment
 
 mokutil --import will ask you to create a temporary password. Enter it, then enter it again to confirm. On next reboot, use:
@@ -775,6 +802,7 @@ mokutil --import will ask you to create a temporary password. Enter it, then ent
   # glibc fully-buffer it instead of line-buffering, so the prompts don't
   # show up before it blocks waiting on input.
   mokutil --import "$cert" || fail "mokutil --import failed or was cancelled. Rerun the script to try again."
+  mok_key_is_queued "$cert" || warn "mokutil did not list the key as queued. If the MOK Manager screen does not appear on reboot, rerun this script."
   mok_reboot_notice_and_exit
 }
 
