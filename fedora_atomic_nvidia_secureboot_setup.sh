@@ -41,8 +41,9 @@
 #   hostile multi-user environments.
 #
 # IMPORTANT GOTCHA
-#   Do not remove akmods-keys while keeping akmod-nvidia installed. akmods may
-#   automatically rebuild NVIDIA modules later. Without akmods-keys, those rebuilt
+#   Do not remove akmods-keys while keeping akmod-nvidia installed. On rpm-ostree
+#   the NVIDIA module is rebuilt every time a new deployment is composed, for
+#   example on every rpm-ostree upgrade. Without akmods-keys, those rebuilt
 #   modules can be unsigned, and Secure Boot will reject them with:
 #       Key was rejected by service
 #       Loading of unsigned module is rejected
@@ -74,15 +75,17 @@
 # WHAT IT DOES
 #   - checks this is an rpm-ostree Fedora Atomic system
 #   - checks/stages RPM Fusion repositories
-#   - checks/stages NVIDIA packages
 #   - adds nouveau blacklist and nvidia-drm.modeset=1 kernel args
+#   - stages akmods and build tools
 #   - creates or reuses a local akmods signing key
 #   - checks/enrolls the public MOK key
 #   - builds and installs a local akmods-keys RPM
-#   - uses akmods to build a signed NVIDIA kmod RPM
-#   - inspects signatures inside generated kmod RPMs
-#   - normally lets akmods provide the signed NVIDIA module automatically
-#   - optionally layers the signed kmod RPM only with --layer-kmod-rpm recovery mode
+#   - checks/stages NVIDIA packages, after the key is in place so the module
+#     akmods builds during layering is already signed
+#   - if no signed module is active, uses akmods to build a signed kmod RPM,
+#     inspects the signatures inside it, and layers it for this kernel
+#   - --layer-kmod-rpm forces that build and relayer even when a signed
+#     module is already active
 #   - verifies module signer, Secure Boot state, and nvidia-smi
 
 set -Eeuo pipefail
@@ -532,7 +535,9 @@ The open-source nouveau driver must stay out of the way, and NVIDIA DRM modesett
 ensure_nvidia_packages() {
   explain "Check: NVIDIA packages
 
-This checks that akmod-nvidia is installed to build the kernel module and xorg-x11-drv-nvidia-cuda is installed for nvidia-smi."
+This checks that akmod-nvidia is installed to build the kernel module and xorg-x11-drv-nvidia-cuda is installed for nvidia-smi.
+
+On rpm-ostree systems akmods builds the NVIDIA module while akmod-nvidia is being layered, inside the rpm-ostree %post sandbox. That is why this step runs only after akmods-keys is layered, so the very first build is already signed."
 
   local missing=()
   for pkg in "${REQUIRED_PACKAGES[@]}"; do
@@ -555,9 +560,10 @@ This checks that akmod-nvidia is installed to build the kernel module and xorg-x
 ensure_build_tools() {
   explain "Check: local build/inspection tools
 
-This script needs rpmbuild to create the local akmods-keys RPM, and rpm2cpio/cpio to inspect RPM contents before trusting them."
+This script needs akmods for kmodgenca and module builds, rpmbuild to create the local akmods-keys RPM, and rpm2cpio/cpio to inspect RPM contents before trusting them."
 
   local missing_packages=()
+  command -v akmods >/dev/null 2>&1 || missing_packages+=("akmods")
   command -v rpmbuild >/dev/null 2>&1 || missing_packages+=("rpm-build")
   command -v cpio >/dev/null 2>&1 || missing_packages+=("cpio")
 
@@ -571,6 +577,8 @@ This script needs rpmbuild to create the local akmods-keys RPM, and rpm2cpio/cpi
     reboot_notice_and_exit
   fi
 
+  require_cmd akmods
+  require_cmd kmodgenca
   require_cmd rpmbuild
   require_cmd rpm2cpio
   require_cmd cpio
@@ -1302,18 +1310,18 @@ main() {
   fedora_version_id >/dev/null
   ensure_rpmfusion_repos
   ensure_kernel_args
-  ensure_nvidia_packages
   ensure_build_tools
   ensure_akmods_keypair
   ensure_mok_enrolled
   ensure_akmods_keys_package_installed
   ensure_packaged_key_permissions
-  build_signed_kmod_rpm
+  ensure_nvidia_packages
 
   if [[ "$LAYER_KMOD_RPM" == "yes" ]] || ! active_module_is_trusted; then
+    build_signed_kmod_rpm
     layer_signed_kmod_rpm_if_needed
   else
-    log "Skipping kmod RPM layering. A correctly signed NVIDIA module is already active for this kernel."
+    log "Skipping kmod RPM build and layering. A correctly signed NVIDIA module is already active for this kernel."
   fi
 
   verify_module_signature_and_driver
